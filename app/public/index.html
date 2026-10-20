@@ -75,11 +75,24 @@
   .dose.done .paw svg { opacity: 1; transform: scale(1) rotate(0); }
   .dose.next { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(224,138,60,.18); }
   .tag { grid-column: 1 / -1; font-size: .8rem; font-weight: 800; color: var(--accent); margin-top: -4px; }
+  .notebar { grid-column: 1 / -1; display: flex; gap: 8px; align-items: flex-start; cursor: default; }
+  .notebar textarea { flex: 1; min-width: 0; user-select: text; -webkit-user-select: text; font: inherit; font-size: .88rem; font-weight: 600; color: var(--fg); background: var(--bg);
+    border: 2px solid var(--line); border-radius: 12px; padding: 7px 10px; resize: none; line-height: 1.35; min-height: 2.4em; }
+  .notebar textarea:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
+  .notebar textarea::placeholder { color: var(--muted); font-weight: 600; }
+  .notebar .side { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; flex: none; }
+  .notebar button { font: inherit; font-size: .8rem; font-weight: 800; color: var(--fg); background: var(--card); border: 2px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+  .notebar button[disabled] { opacity: .45; cursor: default; }
+  .notebar button:focus-visible { outline: 3px solid var(--sky); outline-offset: 2px; }
+  .notebar .count { font-size: .7rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .notebar .meta { grid-column: 1 / -1; font-size: .72rem; font-weight: 700; color: var(--muted); margin-top: -6px; }
+  .dose.done .notebar textarea, .dose.done .notebar button { opacity: 1; text-decoration: none; }
+  td .n { display: block; white-space: normal; max-width: 160px; font-weight: 600; color: var(--fg); font-size: .75rem; margin-top: 3px; border-left: 3px solid var(--accent); padding-left: 5px; }
   .toast { text-align: center; font-family: var(--display); font-weight: 600; font-size: 1.2rem; color: var(--done); min-height: 1.5em; }
 
   .log { background: var(--card); border: 2px solid var(--line); border-radius: 18px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
   .logwrap { overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: .82rem; font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: .82rem; font-variant-numeric: tabular-nums; }
   th, td { padding: 6px 6px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
   th { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 800; }
   th i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
@@ -136,7 +149,7 @@
 
   <section class="log">
     <h2>Dose log</h2>
-    <p class="note">Shared by everyone with the link. Exact Central time each dose was checked, and by whom. A med day runs 8 AM through the 2 AM dose, then rolls over at 3 AM.</p>
+    <p class="note">Shared by everyone with the link. Exact Central time each dose was checked, and by whom, plus any note (notes never change the check time). A med day runs 8 AM through the 2 AM dose, then rolls over at 3 AM.</p>
     <div class="logwrap"><table id="logTable"></table></div>
   </section>
 </div>
@@ -191,7 +204,13 @@
   function setSync(text, err) { const el = $('sync'); el.textContent = text; el.className = 'sync' + (err ? ' err' : ''); }
   async function refresh() {
     if (!key) return;
-    try { apply(await api('/api/log')); setSync('Synced ' + fmtTime(Date.now() + skew)); }
+    try {
+      const data = await api('/api/log');
+      // don't re-render underneath someone typing a note; just keep the fresh data
+      if (document.activeElement && document.activeElement.matches('.notebar textarea')) { S = data; skew = data.now - Date.now(); }
+      else apply(data);
+      setSync('Synced ' + fmtTime(Date.now() + skew));
+    }
     catch (e) { setSync(e.message === 'bad key' ? 'Key not accepted — ask for a fresh link' : 'Offline — retrying', true); }
   }
   function apply(data) { S = data; skew = data.now - Date.now(); render(); }
@@ -209,16 +228,26 @@
     $('dayLabel').textContent = fmtDay(fromKey(tk), { weekday: 'long', month: 'short', day: 'numeric' });
     $('dayNum').textContent = dn >= 1 && dn <= N ? `Day ${dn} of ${N}` : dn > N ? 'Course complete' : 'Course starts ' + fmtDay(fromKey(S.course.start));
 
+    const tn = (S.notes || {})[tk] || {};
+    // keep unsaved drafts across re-renders
+    const drafts = {}; document.querySelectorAll('.notebar textarea').forEach(t => { if (t.dataset.dirty) drafts[t.id] = t.value; });
     $('list').innerHTML = DOSES.map(d => {
-      const e = st[d.id];
+      const e = st[d.id], nt = tn[d.id];
       return `<li class="dose ${e ? 'done' : ''} ${d.id === next ? 'next' : ''}" data-id="${d.id}" tabindex="0" role="checkbox" aria-checked="${!!e}">
         <div class="time">${d.time}<small>${d.label || d.ampm}</small></div>
         <div class="meds">${d.meds.map(m => `<span class="pill ${m[0]}"><i></i>${m[1]}</span>`).join('')}
           ${e ? `<span class="given">✓ ${fmtTime(e.ts)}${e.by ? ' · ' + esc(e.by) : ''}</span>` : ''}</div>
         <div class="paw">${PAW}</div>
         ${d.id === next ? '<div class="tag">Next up</div>' : ''}
+        <div class="notebar" data-stop>
+          <textarea id="note-${d.id}" rows="1" maxlength="255" placeholder="Add a note (ate well, skipped, vomited…)" aria-label="Note for ${d.time} ${d.label || d.ampm} dose">${esc(nt ? nt.text : '')}</textarea>
+          <div class="side"><button type="button" data-save="${d.id}" disabled>Save</button><span class="count" id="count-${d.id}">${nt ? nt.text.length : 0}/255</span></div>
+        </div>
+        ${nt ? `<div class="meta">Note ${fmtTime(nt.at)}${nt.by ? ' · ' + esc(nt.by) : ''}</div>` : ''}
       </li>`; }).join('');
 
+    Object.entries(drafts).forEach(([id, v]) => { const t = $(id); if (t) { t.value = v; t.dataset.dirty = '1'; markDirty(t); } });
+    document.querySelectorAll('.notebar textarea').forEach(autosize);
     const n = Object.keys(st).length;
     const fullDays = Object.keys(S.log).filter(k => k !== tk && Object.keys(S.log[k]).length === DOSES.length).length;
     $('progCount').textContent = `${n} / 6 today · ${fullDays} full day${fullDays === 1 ? '' : 's'} logged`;
@@ -237,9 +266,11 @@
         const e = S.log[k] || {}, d = fromKey(k), dn2 = dayNumber(k);
         return `<tr class="${k === tk ? 'cur' : ''}"><td class="day">${dn2 >= 1 && dn2 <= N ? 'Day ' + dn2 : fmtDay(d)}<small>${fmtDay(d)}</small></td>` +
           DOSES.map(ds => {
-            const x = e[ds.id]; if (!x) return '<td><span class="miss">—</span></td>';
+            const x = e[ds.id], nn = ((S.notes || {})[k] || {})[ds.id];
+            const noteHtml = nn ? `<span class="n">${esc(nn.text)}</span>` : '';
+            if (!x) return `<td><span class="miss">—</span>${noteHtml}</td>`;
             const other = calKeyOf(x.ts) !== k ? fmtDay(new Date(x.ts), { month: 'short', day: 'numeric' }) + (x.by ? ' · ' : '') : '';
-            return `<td><span class="t">${fmtTime(x.ts)}<small>${other}${esc(x.by || '')}</small></span></td>`;
+            return `<td><span class="t">${fmtTime(x.ts)}<small>${other}${esc(x.by || '')}</small></span>${noteHtml}</td>`;
           }).join('') + '</tr>';
       }).join('') + '</tbody>';
   }
@@ -255,8 +286,30 @@
       setSync('Synced ' + fmtTime(Date.now() + skew));
     } catch (e) { setSync("Couldn't save — check your connection", true); render(); }
   }
-  $('list').addEventListener('click', e => { const li = e.target.closest('.dose'); if (li) toggle(li.dataset.id); });
-  $('list').addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && e.target.classList.contains('dose')) { e.preventDefault(); toggle(e.target.dataset.id); } });
+  function autosize(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 120) + 'px'; }
+  function markDirty(t) {
+    const id = t.id.slice(5), btn = document.querySelector(`[data-save="${id}"]`), saved = (((S.notes || {})[S.today] || {})[id] || {}).text || '';
+    $('count-' + id).textContent = t.value.length + '/255';
+    if (btn) btn.disabled = t.value.trim() === saved.trim();
+  }
+  async function saveNote(id) {
+    const t = $('note-' + id), btn = document.querySelector(`[data-save="${id}"]`); if (!t) return;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      apply(await api('/api/note', { method: 'POST', body: JSON.stringify({ day: S.today, dose: id, text: t.value, by: nameEl.value.trim() }) }));
+      $('toast').textContent = t.value.trim() ? 'Note saved.' : 'Note removed.';
+      setSync('Synced ' + fmtTime(Date.now() + skew));
+    } catch (e) { setSync("Couldn't save note — check your connection", true); btn.disabled = false; btn.textContent = 'Save'; }
+  }
+  $('list').addEventListener('click', e => {
+    if (e.target.closest('.notebar')) { const b = e.target.closest('[data-save]'); if (b) saveNote(b.dataset.save); return; }
+    const li = e.target.closest('.dose'); if (li) toggle(li.dataset.id);
+  });
+  $('list').addEventListener('input', e => { if (e.target.matches('.notebar textarea')) { e.target.dataset.dirty = '1'; autosize(e.target); markDirty(e.target); } });
+  $('list').addEventListener('keydown', e => {
+    if (e.target.matches('.notebar textarea')) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveNote(e.target.id.slice(5)); } return; }
+    if ((e.key === ' ' || e.key === 'Enter') && e.target.classList.contains('dose')) { e.preventDefault(); toggle(e.target.dataset.id); }
+  });
 
   refresh();
   setInterval(refresh, 15000);

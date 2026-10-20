@@ -18,11 +18,15 @@ if (!EDIT_KEY || EDIT_KEY.length < 12) { console.error('Set EDIT_KEY (12+ chars)
 fs.mkdirSync(DATA_DIR, { recursive: true });
 try { fs.accessSync(DATA_DIR, fs.constants.W_OK); } catch (e) { console.error(`DATA_DIR ${DATA_DIR} is not writable by uid ${process.getuid()}`); process.exit(1); }
 
-let log = {};
-try { log = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (e) { log = {}; }
+// log[day][dose] = { ts, by }   notes[day][dose] = { text, at, by }  (independent of the check)
+let log = {}, notes = {};
+try {
+  const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  if (raw && raw.log) { log = raw.log; notes = raw.notes || {}; } else log = raw || {};
+} catch (e) { log = {}; notes = {}; }
 function persist() {
   const tmp = DATA_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(log, null, 1));
+  fs.writeFileSync(tmp, JSON.stringify({ log, notes }, null, 1));
   fs.renameSync(tmp, DATA_FILE); // atomic swap
 }
 
@@ -35,6 +39,7 @@ function localParts(ts) {
 function medDayKey(ts) { return localParts(ts - ROLLOVER_HOUR * 3600e3).key; }
 
 const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
+const state = () => ({ log, notes, now: Date.now(), today: medDayKey(Date.now()), course: COURSE, tz: TZ });
 const PAGE = fs.readFileSync(path.join(__dirname, 'public', 'index.html'));
 
 function json(res, code, body) {
@@ -65,7 +70,7 @@ const server = http.createServer(async (req, res) => {
     if (!key || !safeEq(key, EDIT_KEY)) return json(res, 401, { error: 'bad key' });
 
     if (req.method === 'GET' && url.pathname === '/api/log') {
-      return json(res, 200, { log, now: Date.now(), today: medDayKey(Date.now()), course: COURSE, tz: TZ });
+      return json(res, 200, state());
     }
     if (req.method === 'POST' && url.pathname === '/api/check') {
       let body; try { body = await readBody(req); } catch (e) { return json(res, 400, { error: 'bad body' }); }
@@ -77,7 +82,20 @@ const server = http.createServer(async (req, res) => {
       if (action === 'set') { if (!log[day][dose]) log[day][dose] = { ts: Date.now(), by }; }
       else { delete log[day][dose]; if (!Object.keys(log[day]).length) delete log[day]; }
       try { persist(); } catch (e) { console.error('persist failed:', e.message); return json(res, 500, { error: 'could not save: ' + e.code }); }
-      return json(res, 200, { log, now: Date.now(), today: medDayKey(Date.now()), course: COURSE, tz: TZ });
+      return json(res, 200, state());
+    }
+    if (req.method === 'POST' && url.pathname === '/api/note') {
+      let body; try { body = await readBody(req); } catch (e) { return json(res, 400, { error: 'bad body' }); }
+      const { dose } = body;
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(body.day || '') ? body.day : medDayKey(Date.now());
+      if (!DOSE_IDS.has(dose) || typeof body.text !== 'string') return json(res, 400, { error: 'bad dose/text' });
+      const text = body.text.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 255);
+      const by = String(body.by || '').replace(/[^\w .'-]/g, '').slice(0, 24);
+      notes[day] = notes[day] || {};
+      if (text) notes[day][dose] = { text, at: Date.now(), by };
+      else { delete notes[day][dose]; if (!Object.keys(notes[day]).length) delete notes[day]; }
+      try { persist(); } catch (e) { console.error('persist failed:', e.message); return json(res, 500, { error: 'could not save: ' + e.code }); }
+      return json(res, 200, state());
     }
     return json(res, 404, { error: 'not found' });
   }
