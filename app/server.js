@@ -16,6 +16,7 @@ const DOSE_IDS = new Set(['m08', 'c14', 'g16', 'r20', 'g24', 'c26']);
 
 if (!EDIT_KEY || EDIT_KEY.length < 12) { console.error('Set EDIT_KEY (12+ chars) in the environment.'); process.exit(1); }
 fs.mkdirSync(DATA_DIR, { recursive: true });
+try { fs.accessSync(DATA_DIR, fs.constants.W_OK); } catch (e) { console.error(`DATA_DIR ${DATA_DIR} is not writable by uid ${process.getuid()}`); process.exit(1); }
 
 let log = {};
 try { log = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (e) { log = {}; }
@@ -75,7 +76,7 @@ const server = http.createServer(async (req, res) => {
       log[day] = log[day] || {};
       if (action === 'set') { if (!log[day][dose]) log[day][dose] = { ts: Date.now(), by }; }
       else { delete log[day][dose]; if (!Object.keys(log[day]).length) delete log[day]; }
-      persist();
+      try { persist(); } catch (e) { console.error('persist failed:', e.message); return json(res, 500, { error: 'could not save: ' + e.code }); }
       return json(res, 200, { log, now: Date.now(), today: medDayKey(Date.now()), course: COURSE, tz: TZ });
     }
     return json(res, 404, { error: 'not found' });
