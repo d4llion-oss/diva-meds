@@ -1,0 +1,29 @@
+services:
+  app:
+    build: ./app
+    restart: unless-stopped
+    environment:
+      EDIT_KEY: ${EDIT_KEY:?set EDIT_KEY in .env}
+      COURSE_START: ${COURSE_START:-2026-10-19}
+      COURSE_DAYS: ${COURSE_DAYS:-14}
+      TZ: America/Chicago
+    volumes:
+      - diva-data:/data
+    expose: ["8080"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:-diva.burwinkle.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [app]
+
+volumes:
+  diva-data:
+  caddy-data:
+  caddy-config:
